@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { analyseVideo, probeDurationSec } from './lib/color-grade.mjs';
 
@@ -30,12 +31,50 @@ const applyIdx = args.includes('--apply') ? Number(args[args.indexOf('--apply') 
 const atArg = args.includes('--at') ? Number(args[args.indexOf('--at') + 1]) : null;
 
 if (!file || !fs.existsSync(file)) {
-  console.error('Использование: node scripts/grade.mjs <файл> [--at секунда] [--apply 1..4]');
+  console.error('Использование: node scripts/grade.mjs <файл> [--at секунда] [--apply N]');
   process.exit(1);
 }
 
 const durationSec = probeDurationSec(file);
 const at = atArg ?? Math.min(durationSec / 2, durationSec - 0.5);
+
+// ── Ориентация ───────────────────────────────────────────────────────────────
+//
+// Ориентация определяется по ФАКТИЧЕСКИ извлечённому кадру, а не по флагу
+// rotation в метаданных.
+//
+// 12.08.2026 я сделал наоборот: увидел rotation=90 у клипа DJI и добавил
+// автоматический transpose. Кадр, который до этого выглядел правильно, лёг на
+// бок — потому что ffmpeg отдаёт его уже развёрнутым, а флаг остаётся в
+// метаданных как справочный. Поймал только тогда, когда посмотрел на картинку
+// глазами; до этого «чинил» по метаданным и по размерам из ffprobe.
+//
+// Правило: метаданные — это заявление о файле, а не факт о картинке. Факт —
+// извлечённый кадр.
+const probeFrameDims = () => {
+  const probe = path.join(os.tmpdir(), `orient-${process.pid}.png`);
+  execFileSync('ffmpeg', ['-v', 'error', '-ss', '0', '-i', file, '-frames:v', '1', '-y', probe]);
+  const out = spawnSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=width,height',
+    '-of', 'csv=p=0', probe], { encoding: 'utf8' }).stdout;
+  fs.rmSync(probe, { force: true });
+  const nums = out.match(/\d+/g) || [];
+  return { w: Number(nums[0] || 0), h: Number(nums[1] || 0) };
+};
+
+const frame = probeFrameDims();
+const framePortrait = frame.h > frame.w;
+
+// Флаги перекрывают автоопределение: доворачиваем только по явной просьбе.
+const wantLandscape = args.includes('--landscape');
+const wantPortrait = args.includes('--portrait');
+let orientationFilter = null;
+if (wantPortrait && !framePortrait) orientationFilter = 'transpose=1';
+if (wantLandscape && framePortrait) orientationFilter = 'transpose=2';
+
+const finalPortrait = wantPortrait ? true : wantLandscape ? false : framePortrait;
+console.log(`Ориентация: ${finalPortrait ? 'книжная (вертикальная)' : 'альбомная (горизонтальная)'}`
+  + `, кадр ${frame.w}×${frame.h}.`);
+console.log('  не то — перезапусти с --portrait или --landscape\n');
 
 // ── Замер исходника ──────────────────────────────────────────────────────────
 function stats(src, seek = null) {
@@ -102,13 +141,77 @@ const VARIANTS = [
     note: 'растяжение слабее, тепло сохранено полностью. Для вечернего света.',
     vf: `${curve('0.05', '0.88')},eq=saturation=1.08`,
   },
+  {
+    // Референс — короткометражка «2 AM COFFEE» (Sony FX3), которую автор
+    // прислал 12.08.2026. Замер её кадров против его материала:
+    //
+    //                 материал   референс
+    //   насыщенность      4,6        9,0   ← референс ВДВОЕ насыщеннее
+    //   тени (10 %)        74         16   ← глубокий провал в чёрное
+    //   света             194        240   ← света доходят до края
+    //   цвет           тепло +3   холод −4
+    //
+    // На глаз этот look читается как «приглушённый», и по этому впечатлению
+    // легко было бы снизить насыщенность — замер говорит обратное. Средняя
+    // яркость (59 против 99) буквально не переносится: референс снят ночью,
+    // а материал — днём, и затемнение до 59 даст просто недодержку.
+    name: 'Кинематографичный',
+    note: 'по референсу «2 AM COFFEE»: провал теней в чёрное и холодный сдвиг по всему диапазону.',
+    vf: [
+      // Тени валятся в ноль. У референса нижняя четверть кадра имеет яркость
+      // 0,4 из 255 — это не «потемнее», а именно чёрное поле, на фоне которого
+      // читаются света. Промежуточная точка ниже прямой делает провал резким.
+      `curves=all='0/0 ${(lo + (hi - lo) * 0.22).toFixed(3)}/0.005 ${((lo + hi) / 2).toFixed(3)}/${((lo + hi) / 2 - 0.10).toFixed(3)} ${hi.toFixed(3)}/0.99 1/1'`,
+      // Холод даётся микшером каналов, а не температурой: замер по зонам
+      // показал, что нужен сдвиг R−B на 23 единицы в средних и на 27 в светах,
+      // а colortemperature при mix 0,8 давал единицы. Referenceные значения
+      // R−B: тени −0,4, средние −16,1, света −19,5.
+      'colorchannelmixer=rr=0.86:gg=1.0:bb=1.16',
+      // Отдельный сдвиг средних тонов. Микшер каналов работает по всему кадру
+      // пропорционально, и после провала теней в средних остаются тёплые
+      // поверхности — кирпич, песок, кожа: замер показал R−B +7 там, где у
+      // референса −16. colorbalance бьёт точно по этому диапазону.
+      // Значения подбираются замером: 0,30 дало R−B −45 при цели −16, то есть
+      // перелёт втрое. Фильтр резко нелинеен. Тени не трогаем вовсе — у
+      // референса они нейтральные (−0,4), а не синие.
+      'colorbalance=rm=-0.16:bm=0.16',
+      'eq=saturation=1.25:gamma=0.92',
+    ].join(','),
+  },
+  {
+    // Шестой вариант — ответ на разбор 12.08.2026, где пятый получил 4/10.
+    //
+    // Что чинится. Пятый копировал ЦВЕТ ночного референса на закатную сцену:
+    // холод в светах (−27,8) там, где физически светит тёплое солнце, и провал
+    // теней с 70 до 1 — в чёрное ушло 21,7 % кадра вместе с кирпичом и лицами.
+    //
+    // Здесь от референса берётся только характер — глубина и контраст, — а
+    // логика света остаётся своя: тёплые света от солнца, прохладные тени от
+    // неба. Это естественный контраст золотого часа.
+    //
+    // Материал похож на лог (первый перцентиль яркости 53 при обычных <20),
+    // поэтому кривая мягкая, с плечом в светах: лог пишет всё в серединку, и
+    // резкое растяжение рвёт переходы.
+    name: 'Кинематографичный (день)',
+    note: 'глубина и контраст референса при своей логике света: тёплые света, прохладные тени, лица живые.',
+    vf: [
+      `curves=all='0/0 ${(lo + (hi - lo) * 0.10).toFixed(3)}/0.06 ${((lo + hi) / 2).toFixed(3)}/${((lo + hi) / 2 - 0.05).toFixed(3)} ${hi.toFixed(3)}/0.90 1/1'`,
+      // Тени в прохладу, света в тепло — раздельно, а не сдвигом всего кадра.
+      // Тепло в светах НЕ добавляется: материал закатный и уже тёплый (+10,0).
+      // Первый заход добавил rh=0,05 и получил +38,6 при цели +8…+14 — грел
+      // то, что и так горячее нужного. Работа идёт в другую сторону: тени
+      // уводятся в прохладу, средние подтягиваются к нейтрали.
+      'colorbalance=rs=-0.035:bs=0.035:rm=-0.02:bm=0.02',
+      'eq=saturation=1.12:gamma=0.98',
+    ].join(','),
+  },
 ];
 
 // ── Применение выбранного ────────────────────────────────────────────────────
 if (applyIdx) {
   const v = VARIANTS[applyIdx - 1];
   if (!v) {
-    console.error(`ОШИБКА: вариант ${applyIdx} не существует, их четыре.`);
+    console.error(`ОШИБКА: вариант ${applyIdx} не существует, их ${VARIANTS.length}.`);
     process.exit(1);
   }
   console.log(`Применяю вариант ${applyIdx} — ${v.name}\n  ${v.vf}\n`);
@@ -145,7 +248,15 @@ if (applyIdx) {
   const out = file.replace(/\.\w+$/, `-graded.${ext}`);
 
   execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', file,
-    '-vf', `${v.vf},format=${profile === 'prores' ? 'yuv422p10le' : 'p010le'}`, ...enc, ...colorTags,
+    '-vf', [orientationFilter, v.vf, `format=${profile === 'prores' ? 'yuv422p10le' : 'p010le'}`]
+      .filter(Boolean).join(','), ...enc, ...colorTags,
+    // Флаг снимается: картинка уже довёрнута фильтром, иначе плеер повернёт
+    // её второй раз.
+    // Только -metadata: -display_rotation — входной параметр ffmpeg и на выходе
+    // валит команду целиком («cannot be applied to output url»).
+    // Флаг снимается всегда: картинка в кадре уже правильная, а оставшийся в
+    // метаданных rotation заставит часть плееров повернуть её ещё раз.
+    '-metadata:s:v:0', 'rotate=0',
     '-c:a', 'copy', '-map_metadata', '0', '-movflags', '+faststart', '-y', out], { stdio: 'inherit' });
 
   const after = stats(out, at);
@@ -177,7 +288,7 @@ const PREVIEW_H = Number(args[args.indexOf('--preview-height') + 1]) || 0;
 const scaleChain = PREVIEW_H ? `,scale=-2:${PREVIEW_H}:flags=lanczos` : '';
 const orig = path.join(outDir, '0-original.png');
 execFileSync('ffmpeg', ['-v', 'error', '-ss', String(at), '-i', file, '-frames:v', '1',
-  '-vf', `format=yuv420p${scaleChain}`, '-y', orig]);
+  '-vf', [orientationFilter, `format=yuv420p${scaleChain}`].filter(Boolean).join(','), '-y', orig]);
 tiles.push(orig);
 
 console.log('Варианты:\n');
@@ -188,7 +299,7 @@ VARIANTS.forEach((v, i) => {
   // тогда лежат в разных шкалах и не сравниваются — поймано на первом же
   // прогоне 12.08.2026, где вариант 1 показал «белая точка 58643».
   execFileSync('ffmpeg', ['-v', 'error', '-ss', String(at), '-i', file, '-frames:v', '1',
-    '-vf', `${v.vf},format=yuv420p${scaleChain}`, '-y', p]);
+    '-vf', [orientationFilter, v.vf, `format=yuv420p${scaleChain}`].filter(Boolean).join(','), '-y', p]);
   tiles.push(p);
 
   const s = stats(p);
@@ -212,14 +323,14 @@ const crops = [];
 [{ vf: null, tag: '0-orig' }, ...VARIANTS.map((v, i) => ({ vf: v.vf, tag: String(i + 1) }))]
   .forEach(({ vf, tag }) => {
     const c = path.join(outDir, `crop-${tag}.png`);
-    const chain = [vf, 'format=yuv420p', `crop=${cropW}:${cropH}:(iw-${cropW})/2:ih*0.28`]
+    const chain = [orientationFilter, vf, 'format=yuv420p', `crop=${cropW}:${cropH}:(iw-${cropW})/2:ih*0.28`]
       .filter(Boolean).join(',');
     execFileSync('ffmpeg', ['-v', 'error', '-ss', String(at), '-i', file, '-frames:v', '1',
       '-vf', chain, '-y', c]);
     crops.push(c);
   });
 execFileSync('ffmpeg', ['-v', 'error', ...crops.flatMap((c) => ['-i', c]),
-  '-filter_complex', `[0][1][2][3][4]hstack=inputs=5`, '-y', cropSheet]);
+  '-filter_complex', `${crops.map((_, i) => `[${i}]`).join('')}hstack=inputs=${crops.length}`, '-y', cropSheet]);
 
 // ── Короткие клипы вариантов в финальном качестве ────────────────────────────
 //
@@ -254,7 +365,7 @@ if (args.includes('--clips')) {
   console.log(`\nКлипы вариантов по ${clipSec} с в финальном качестве${clipCrop ? ' (фрагмент кадра 1:1)' : ''}:`);
   VARIANTS.forEach((v, i) => {
     const c = path.join(outDir, `clip-${i + 1}.${clipExt}`);
-    const chain = [v.vf, clipCrop, `format=${args.includes('--prores') ? 'yuv422p10le' : 'p010le'}`]
+    const chain = [orientationFilter, v.vf, clipCrop, `format=${args.includes('--prores') ? 'yuv422p10le' : 'p010le'}`]
       .filter(Boolean).join(',');
     execFileSync('ffmpeg', ['-v', 'error', '-ss', String(from), '-t', String(clipSec), '-i', file,
       '-vf', chain, ...clipProfile, '-an', '-y', c]);
@@ -266,12 +377,12 @@ if (args.includes('--clips')) {
 const sheet = path.join(outDir, 'compare.png');
 execFileSync('ffmpeg', ['-v', 'error',
   ...tiles.flatMap((t) => ['-i', t]),
-  '-filter_complex', `[0][1][2][3][4]hstack=inputs=5`, '-y', sheet]);
+  '-filter_complex', `${tiles.map((_, i) => `[${i}]`).join('')}hstack=inputs=${tiles.length}`, '-y', sheet]);
 
 console.log(`\nЛист сравнения: ${sheet}`);
 console.log(`Кроп 1:1 (шум и детали в тенях): ${cropSheet}`);
 console.log(`Отдельные кадры: ${outDir}`);
-console.log('Порядок слева направо: оригинал, 1, 2, 3, 4.');
+console.log(`Порядок слева направо: оригинал, ${VARIANTS.map((_, i) => i + 1).join(', ')}.`);
 console.log(`\nВыбрал — применяй: node scripts/grade.mjs "${file}" --apply <номер>`);
 console.log('Без --apply видео не трогается.');
 console.log('Качество: по умолчанию HEVC 300 Мбит/с. --prores — максимум для монтажа, --compact — 200 Мбит/с.');
