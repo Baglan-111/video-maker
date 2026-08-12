@@ -40,29 +40,44 @@ Video maker/
 
 ## Установка
 
-```bash
-# 1. Скилл — в Claude Code
-mkdir -p ~/.claude/skills/video-maker
-cp SKILL.md ~/.claude/skills/video-maker/
-
-# 2. Движок — куда удобно, путь пропишите в первой строке SKILL.md
-cd engine && npm install
-npm test        # 142 теста; один пропускается — он смотрит на локальный проект
-```
-
-## Быстрый старт: ролик из снятого видео
+Одна команда. Скрипт проверит, чего не хватает, поставит недостающее, соберёт
+движок, положит скилл в Claude Code и пропишет пути.
 
 ```bash
-cd engine
-mkdir -p ../projects/demo
-# положите video.json (пример — в SKILL.md, раздел story@1)
-
-node scripts/prepare-source.mjs demo ~/path/to/source.mov
-# посмотрите out/demo-source.jpg — где в кадре лицо, куда можно ставить текст
-# разметьте story.scenes в video.json
-node scripts/prepare-source.mjs demo   # пересобрать таймлайн после правки
-node scripts/render.mjs demo           # рендер + приёмка
+git clone https://github.com/Baglan-111/video-maker.git
+cd video-maker/"For share/Video maker"
+sh install.sh          # покажет, что будет сделано
+sh install.sh --yes    # сделает
 ```
+
+Без `--yes` скрипт ничего не устанавливает — только печатает план. Повторный
+запуск безопасен: уже установленное он пропускает.
+
+**Через Claude Code**, если не хочется возиться с терминалом. Открой Claude Code
+в пустой папке и вставь:
+
+> Склонируй https://github.com/Baglan-111/video-maker.git, зайди в папку
+> `For share/Video maker`, покажи мне план из `sh install.sh`, а после моего
+> «да» выполни `sh install.sh --yes` и сообщи результат.
+
+Что скрипт делает:
+
+1. Ставит `node`, `ffmpeg`, `python3`, если их нет (через brew на macOS, apt на
+   Linux; на Windows скажет поставить вручную).
+2. Ставит распознаватель речи: `mlx-whisper` на Apple Silicon, `openai-whisper`
+   на остальных системах.
+3. `npm install` в движке и прогон тестов. Должно быть **142 пройдено, 0
+   упало**; один тест пропускается, он смотрит на локальный проект — это норма.
+4. Копирует `SKILL.md` в `~/.claude/skills/video-maker/` и подставляет туда
+   полный путь к движку. Раньше это был ручной шаг, и про него забывали — Claude
+   потом не находил скрипты.
+
+После установки открой Claude Code и напиши: «собери ролик из видео <путь к
+файлу>».
+
+**ElevenLabs не нужен**, если монтируешь снятое видео. Ключ требуется только для
+роликов с синтезированной речью и кладётся в `~/.config/elevenlabs/.env` строкой
+`ELEVENLABS_API_KEY=...`.
 
 ## Чего здесь нет
 
