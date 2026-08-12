@@ -119,7 +119,13 @@ const finalFile = path.join(outDir, `${slug}.mp4`);
 // финальный файл, либо новый целый — никогда не битый файл под правильным именем.
 const tmpFile = path.join(outDir, `${slug}.norm.tmp.mp4`);
 
+// CRF задаётся явно. По умолчанию Remotion берёт 18 для h264 — приемлемо для
+// превью, но это вторая ступень сжатия после прокси, и потери складываются.
+// Правило автора от 12.08.2026: качество готового ролика не ниже исходника.
+const CRF = process.argv.includes('--compact') ? '18' : '14';
+
 execFileSync('npx', ['remotion', 'render', composition, rawFile,
+  '--crf', CRF,
   '--props', JSON.stringify(props)], { cwd: engine, stdio: 'inherit' });
 
 // Нормализация в два прохода, а не в один.

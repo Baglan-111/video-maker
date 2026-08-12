@@ -108,6 +108,13 @@ if (force || !fs.existsSync(proxyAbs)) {
   }
   checkOnPath('ffmpeg', 'Установи ffmpeg, например: brew install ffmpeg.');
 
+  // CRF 14, а не 20. Прокси — это потолок качества для всего, что будет
+  // дальше: рендер Remotion кладёт графику ПОВЕРХ него, и вернуть потерянное
+  // уже нельзя. Замер 12.08.2026 на съёмке DJI (даунскейл 1728×3072 → 1080×1920):
+  //   crf 20 — 6,5 Мбит/с, SSIM 0,9837   (было)
+  //   crf 14 — 16,2 Мбит/с, SSIM 0,9892  (стало)
+  // Прокси живёт в папке проекта и удаляется вместе с ним, поэтому лишние
+  // мегабайты здесь дешевле потерянных деталей.
   console.log(`Готовлю прокси 1080×1920@${FPS} из ${path.basename(src)} …`);
   // scale + crop, а не растяжение: исходник уже 9:16, но если когда-нибудь
   // придёт кадр другой пропорции, обрезка по центру честнее искажения лиц.
@@ -116,7 +123,7 @@ if (force || !fs.existsSync(proxyAbs)) {
     [
       '-hide_banner', '-loglevel', 'error', '-y', '-i', src,
       '-vf', `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fps=${FPS}`,
-      '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-pix_fmt', 'yuv420p',
+      '-c:v', 'libx264', '-preset', 'slow', '-crf', '14', '-pix_fmt', 'yuv420p',
       '-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2', '-movflags', '+faststart',
       proxyAbs,
     ],
@@ -143,7 +150,17 @@ const gradeMarker = path.join(audioDir, 'grade.json');
 const rawProxy = proxyAbs.replace(/\.mp4$/, '.raw.mp4');
 
 if (grade) {
-  if (fs.existsSync(gradeMarker) && !force) {
+  // Маркер годен, только пока он новее прокси. Прокси пересобран — коррекции в
+  // нём нет, сколько бы маркеров ни лежало рядом. Поймано 12.08.2026: после
+  // пересборки прокси ролик вышел с яркостью 69 вместо 98, потому что шаг
+  // отрапортовал «уже скорректировано» и ничего не сделал.
+  //
+  // Тот же класс, что урок L008: производный артефакт рассинхронизирован с
+  // источником, а признак этого — время изменения, а не факт существования.
+  const markerFresh = fs.existsSync(gradeMarker)
+    && fs.statSync(gradeMarker).mtimeMs >= fs.statSync(proxyAbs).mtimeMs;
+
+  if (markerFresh && !force) {
     console.log('Кадр уже скорректирован (audio/grade.json) — повторно не трогаю: две коррекции подряд пересветят.');
   } else {
     console.log('Считаю цветокоррекцию по кадрам ролика …');
@@ -163,7 +180,7 @@ if (grade) {
       if (!fs.existsSync(rawProxy)) fs.copyFileSync(proxyAbs, rawProxy);
       const tmp = proxyAbs.replace(/\.mp4$/, '.grade.tmp.mp4');
       execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', rawProxy,
-        '-vf', filter, '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-pix_fmt', 'yuv420p',
+        '-vf', filter, '-c:v', 'libx264', '-preset', 'slow', '-crf', '14', '-pix_fmt', 'yuv420p',
         '-c:a', 'copy', '-movflags', '+faststart', tmp], { stdio: 'inherit' });
       fs.renameSync(tmp, proxyAbs);
       fs.writeFileSync(gradeMarker, `${JSON.stringify({ filter, gains: analysis.gains, meanLum: Math.round(analysis.meanLum), meanHigh: Math.round(analysis.meanHigh), probes: analysis.probes }, null, 2)}\n`);
