@@ -216,21 +216,44 @@ if (denoise) {
 
 if (force || !fs.existsSync(wordsFile)) {
   checkOnPath('ffmpeg', 'Установи ffmpeg, например: brew install ffmpeg.');
-  checkOnPath('mlx_whisper', 'Установи: pip install mlx-whisper (нужен Apple Silicon).');
 
-  const wav = path.join(audioDir, 'speech.16k.wav');
-  console.log('Извлекаю дорожку и распознаю речь (large-v3-turbo, это минуты) …');
+  // Распознавание — единственное место во всём конвейере, завязанное на железо.
+  // mlx_whisper быстрый, но работает только на Apple Silicon; openai-whisper
+  // идёт везде, включая Windows и Linux, просто медленнее на процессоре.
+  // Формат вывода у них одинаковый (segments[].words[] со start/end/word),
+  // поэтому остальной конвейер про эту разницу не знает.
+  const engines = [
+    {
+      bin: 'mlx_whisper',
+      args: (wav) => [wav, '--language', 'ru',
+        '--model', 'mlx-community/whisper-large-v3-turbo',
+        '--word-timestamps', 'True', '--output-format', 'json',
+        '--output-name', 'words', '--output-dir', audioDir],
+    },
+    {
+      bin: 'whisper',
+      args: (wav) => [wav, '--language', 'ru',
+        '--model', 'large-v3-turbo',
+        '--word_timestamps', 'True', '--output_format', 'json',
+        '--output_dir', audioDir],
+    },
+  ];
+  const engine = engines.find((e) => spawnSync('which', [e.bin]).status === 0);
+  if (!engine) {
+    console.error('ОШИБКА: не найден распознаватель речи. Поставь один из двух:');
+    console.error('  pip install mlx-whisper     — быстрый, только Apple Silicon');
+    console.error('  pip install openai-whisper  — медленнее, работает везде');
+    process.exit(1);
+  }
+
+  // Имя файла берётся из имени входа: openai-whisper не умеет --output-name,
+  // зато оба кладут <имя входа>.json в каталог вывода.
+  const wav = path.join(audioDir, 'words.wav');
+  console.log(`Извлекаю дорожку и распознаю речь (${engine.bin}, это минуты) …`);
   execFileSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-i', proxyAbs,
     '-vn', '-ac', '1', '-ar', '16000', wav], { stdio: 'inherit' });
 
-  execFileSync('mlx_whisper', [wav,
-    '--language', 'ru',
-    '--model', 'mlx-community/whisper-large-v3-turbo',
-    '--word-timestamps', 'True',
-    '--output-format', 'json',
-    '--output-name', 'words',
-    '--output-dir', audioDir,
-  ], { stdio: 'inherit' });
+  execFileSync(engine.bin, engine.args(wav), { stdio: 'inherit' });
 
   fs.unlinkSync(wav);
   console.log('  транскрипт готов: audio/words.json');
