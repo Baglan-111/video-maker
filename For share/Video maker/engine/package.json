@@ -1,0 +1,39 @@
+{
+  "name": "video-maker-engine",
+  "version": "1.0.0",
+  "description": "Remotion engine for vertical storytelling reels with machine acceptance checks",
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "@remotion/captions": "4.0.506",
+    "@remotion/cli": "4.0.506",
+    "@remotion/google-fonts": "4.0.506",
+    "@remotion/media": "4.0.506",
+    "@remotion/zod-types": "4.0.506",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "4.0.506",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@remotion/eslint-config-flat": "4.0.506",
+    "@types/react": "19.2.7",
+    "@types/web": "0.0.166",
+    "eslint": "9.19.0",
+    "prettier": "3.8.1",
+    "typescript": "5.9.3"
+  },
+  "scripts": {
+    "dev": "node scripts/studio.mjs",
+    "studio": "node scripts/studio.mjs",
+    "tts": "node scripts/tts.mjs",
+    "render": "node scripts/render.mjs",
+    "build": "remotion bundle",
+    "upgrade": "remotion upgrade",
+    "test": "node --test tests/*.test.mjs",
+    "lint": "eslint src && tsc"
+  },
+  "sideEffects": [
+    "*.css"
+  ]
+}
