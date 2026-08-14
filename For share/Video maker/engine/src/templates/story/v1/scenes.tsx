@@ -1,11 +1,26 @@
-import { Easing, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
+import { Easing, interpolate, staticFile, useCurrentFrame, useVideoConfig } from 'remotion';
+import { Video } from '@remotion/media';
 import { storyTokens, storyComponents, storyMotion } from '../../../brand/story-tokens';
 import { fontFamily } from '../../../brand/fonts';
 import { Kicker, Scrim, SceneCaption, SceneStage, useEnter, STACK_BOTTOM } from './parts';
-import { HouseFigure, TentFigure, MiniHouse, MiniTent } from './figures';
+import {
+  HouseFigure,
+  TentFigure,
+  CheckCrossFigure,
+  ScanFigure,
+  LensFigure,
+  KnotGlyph,
+  SparkGlyph,
+  BurstGlyph,
+  MiniHouse,
+  MiniTent,
+} from './figures';
 import type {
   StoryScene,
   StoryMetaphorScene,
+  StoryProofScene,
+  StoryInsertScene,
+  StoryLensScene,
   StoryStatementScene,
   StoryQuestionsScene,
   StoryCompareScene,
@@ -78,6 +93,61 @@ const Panel: React.FC<{ children: React.ReactNode; delayFrames?: number }> = ({
 const TalkingHead: React.FC<{ scene: StoryTalkingHeadScene }> = ({ scene }) =>
   scene.kicker ? <Kicker text={scene.kicker} /> : null;
 
+/**
+ * Врезка-доказательство: фигура во весь экран плюс заголовок.
+ *
+ * Отличие от метафоры только в наборе фигур и в том, что пояснение
+ * необязательно: у финальной врезки под фигурой стоит вывод ролика, а у
+ * промежуточной хватает одной строки.
+ */
+const Proof: React.FC<{ scene: StoryProofScene; ctx: SceneContext }> = ({ scene, ctx }) => (
+  <Scrim
+    durationInFrames={ctx.durationInFrames}
+    continuesFromPrev={ctx.prevIsFullscreen}
+    continuesToNext={ctx.nextIsFullscreen}
+  >
+    <SceneCaption title={scene.title} note={scene.note ?? ''} />
+    <SceneStage>{scene.kind === 'checkCross' ? <CheckCrossFigure /> : <ScanFigure />}</SceneStage>
+  </Scrim>
+);
+
+/**
+ * Видеовставка: отдельный снятый кадр поверх основного слоя.
+ *
+ * Звук выключен жёстко: речь идёт непрерывным дублем под низом, вторая дорожка
+ * её перебьёт. Кадр закрывает экран целиком, поэтому вставка считается
+ * фулскрин-сценой — стык с соседями обрабатывается как у графических врезок.
+ */
+const Insert: React.FC<{ scene: StoryInsertScene }> = ({ scene }) => (
+  <Video
+    src={staticFile(`project/assets/${scene.clip}`)}
+    volume={0}
+    style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }}
+  />
+);
+
+/**
+ * Лупа над строкой ответа.
+ *
+ * Снаружи строка выглядит законченным ответом, под стеклом видно, что одно
+ * слово врёт. Метафора не иносказательная: ровно так проверяют текст глазами,
+ * и ролик про это.
+ *
+ * Заголовок-вывод стоит с первого кадра, движется только стекло.
+ */
+const Lens: React.FC<{ scene: StoryLensScene; ctx: SceneContext }> = ({ scene, ctx }) => (
+  <Scrim
+    durationInFrames={ctx.durationInFrames}
+    continuesFromPrev={ctx.prevIsFullscreen}
+    continuesToNext={ctx.nextIsFullscreen}
+  >
+    <SceneCaption title={scene.title} note="" />
+    <SceneStage>
+      <LensFigure text={scene.text} flaw={scene.flaw} />
+    </SceneStage>
+  </Scrim>
+);
+
 const Metaphor: React.FC<{ scene: StoryMetaphorScene; ctx: SceneContext }> = ({ scene, ctx }) => (
   <Scrim
     durationInFrames={ctx.durationInFrames}
@@ -142,6 +212,24 @@ const Statement: React.FC<{ scene: StoryStatementScene }> = ({ scene }) => {
 
   return (
     <Panel>
+      {/* Ряд значков стоит с первого кадра, без проявления: он и есть хук,
+          опаздывать ему некуда. Панель с ним выше на ~100 px, нижняя граница
+          уходит на 1300 при подбородке выше 1200 — замер сходится. */}
+      {scene.glyphs ? (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            gap: storyTokens.space[4],
+            marginBottom: storyTokens.space[3],
+          }}
+        >
+          <KnotGlyph />
+          <SparkGlyph />
+          <BurstGlyph />
+        </div>
+      ) : null}
       {scene.lines.map((line, i) => (
         <StatementLine key={i} text={line} delayFrames={i * step} last={i === scene.lines.length - 1} />
       ))}
@@ -313,7 +401,7 @@ const Cta: React.FC<{ scene: StoryCtaScene }> = ({ scene }) => (
  * переход между соседними сценами. Две фулскрин-сцены подряд не должны гасить и
  * зажигать фон на стыке — см. Scrim.
  */
-export const FULLSCREEN_KINDS = new Set(['house', 'tent', 'accent']);
+export const FULLSCREEN_KINDS = new Set(['house', 'tent', 'accent', 'checkCross', 'scan', 'insert', 'lens']);
 
 /** Что сцене нужно знать о своём месте в ролике. */
 export type SceneContext = {
@@ -330,6 +418,13 @@ export const StorySceneView: React.FC<{ scene: StoryScene; ctx: SceneContext }> 
     case 'house':
     case 'tent':
       return <Metaphor scene={scene} ctx={ctx} />;
+    case 'checkCross':
+    case 'scan':
+      return <Proof scene={scene} ctx={ctx} />;
+    case 'insert':
+      return <Insert scene={scene} />;
+    case 'lens':
+      return <Lens scene={scene} ctx={ctx} />;
     case 'accent':
       return <Accent scene={scene} ctx={ctx} />;
     case 'statement':

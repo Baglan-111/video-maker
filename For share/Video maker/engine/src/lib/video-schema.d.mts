@@ -53,8 +53,11 @@ export type StoryRange = {
 
 export type StoryTalkingHeadScene = StoryRange & { kind: 'talkingHead'; kicker?: string };
 export type StoryMetaphorScene = StoryRange & { kind: 'house' | 'tent'; title: string; note: string };
+export type StoryProofScene = StoryRange & { kind: 'checkCross' | 'scan'; title: string; note?: string };
 export type StoryAccentScene = StoryRange & { kind: 'accent'; text: string };
-export type StoryStatementScene = StoryRange & { kind: 'statement'; lines: string[] };
+export type StoryInsertScene = StoryRange & { kind: 'insert'; clip: string };
+export type StoryLensScene = StoryRange & { kind: 'lens'; title: string; text: string; flaw: string };
+export type StoryStatementScene = StoryRange & { kind: 'statement'; lines: string[]; glyphs?: boolean };
 export type StoryQuestionsScene = StoryRange & { kind: 'questions'; wrong: string; right: string };
 export type StoryCompareScene = StoryRange & { kind: 'compare'; badLabel: string; goodLabel: string };
 export type StoryCtaScene = StoryRange & { kind: 'cta'; text: string };
@@ -62,6 +65,9 @@ export type StoryCtaScene = StoryRange & { kind: 'cta'; text: string };
 export type StoryScene =
   | StoryTalkingHeadScene
   | StoryMetaphorScene
+  | StoryProofScene
+  | StoryInsertScene
+  | StoryLensScene
   | StoryAccentScene
   | StoryStatementScene
   | StoryQuestionsScene
